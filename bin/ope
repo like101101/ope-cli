@@ -79,14 +79,16 @@ BBlack='\033[1;30m'       # Bold Black
 BCyan='\033[1;36m'        # Bold Cyan
 BGreen='\033[1;32m'
 
-# Helper functions
-fc_header_logging (){
+# ----------------- Helper Functions -----------------
+fc_header_logging () {
+    # A helper function that logs the command and the current working directory given function name as $1ß
     current_time=$(date +%T)
     cwd=$(pwd)
     echo "[${current_time}]: ${0##*/} $1 $cwd" >> $LOG_FILE
 }
 
 rolling_output () {
+    # A helper function that prints the output of a command in a rolling fashion, currently unused
     input=$(cat <&0 | tr '\r' '\n')
     if [[ $VERBOSE -eq 0 ]]; then
         echo $input | while read line; do echo -ne "\033[2K\r"; printf "     ${Grey}$line${Color_Off}\r"; done
@@ -95,8 +97,9 @@ rolling_output () {
     fi
 }
 
-verify_repo (){
-
+verify_repo () {
+    # A helper function that verifies that we are inside a valid OPE repository
+    
     # Check if we are inside a repository
     if ! ${REPO_CMD} ${IF_INSIDE_REPO} &>/dev/null; then
         echo -e "$HEADER${Red}ERROR: Not a valid repository${Color_Off}"
@@ -117,11 +120,47 @@ verify_repo (){
     
 }
 
-get_help_from_makefile(){
+get_help_from_makefile() {
+    # A helper function that prints the help message from the Makefile
+
     option=$1
     cat Makefile | grep -E '^[a-zA-Z0-9_%/-]+:.*?## .*$$' | grep -E "^${option}" | tr -d '#' |column -t -s : | tr '-' ' '
 }
 
+print_func_page() {
+    # A helper function that prints the top-level functions and their descriptions
+
+    func_names=($(grep '^function' $0 | awk '{print $2}'))
+    grep '^#DESCRIPTION' $0 | awk -F: '{print $2}' | while read line ; do echo -e "  ${Blue}${func_names[$i]}${Color_Off}, $line\n"; i=$((i+1)); done | column -t -s,
+}
+
+Usage() {
+    # A helper function that prints the Usage of the script
+
+    echo 
+    echo "Usage:  ${0##*/} FUNCTION {ARGS} " >&2
+    echo
+    echo "A command-line tool for building open source infrastructures using ope framework"
+    echo 
+    echo "Functions: "
+    print_func_page
+    echo
+    echo "for each func use '-h' to print its Usage: eg. ${0##*/} dump -h"
+    echo "will print the Usage for the dump command"
+}
+
+process_args() {
+    # A helper function that processes the arguments
+    if [[ $# == 0 || $1 = '-h' ]]
+    then
+        Usage
+        exit -1
+    fi
+
+    dofunc=$1
+}
+
+# ----------------- Main Functions -----------------
 function clone
 #DESCRIPTION: clone the OPE repository for development
 {
@@ -135,39 +174,46 @@ function clone
         return -1
     fi
 
+    # Check if the organization already exists locally
     basename=$(basename $url)
     repo=${basename%.*}
-
-    # Check if the organization already exists locally
     if [[ -d $repo ]]; then
         echo -e "$HEADER${Red}ERROR: Repository $repo already exists${Color_Off}"
         return -1
     fi
 
-    ORG_NAME="${OPE_ORG_NAME}"
-    REPO_NAME="${OPE_REPO_NAME}"
-    eval "OPE_REPO_URL=$REPO_URL"
-    echo $OPE_REPO_URL
+    # Logging information
+    func_name=${FUNCNAME[0]}
+    func_args=$@
+    fc_header_logging "$func_name $func_args"
+    
 
-    echo -e "$HEADER${Cyan}Creating OPE repository locally${Color_Off}"
-    mkdir -p ${repo}
-    cd ${repo}
-    echo -e "$HEADER${Cyan}Linking ope-upstream branches${Color_Off}"
+    # The following will send to the log file
+    { 
+        ORG_NAME="${OPE_ORG_NAME}"
+        REPO_NAME="${OPE_REPO_NAME}"
+        eval "OPE_REPO_URL=$REPO_URL"
+        echo $OPE_REPO_URL
 
-    ${REPO_CMD} ${INIT}
-    # Adding the remotes
-    ${REPO_CMD} ${REMOTE_ADD} ope-upstream ${OPE_REPO_URL} # | rolling_output #0<&0
-    ${REPO_CMD} ${REMOTE_ADD} origin ${url} # | rolling_output #0<&0
+        echo -e "$HEADER${Cyan}Creating OPE repository locally${Color_Off}"
+        mkdir -p ${repo}
+        cd ${repo}
+        echo -e "$HEADER${Cyan}Linking ope-upstream branches${Color_Off}"
 
-    for branch in "${UPSTREAM_BRANCHES[@]}"; do
-        ${REPO_CMD} ${FETCH} ope-upstream ${branch} 2>&1  # | rolling_output #0<&0 #| while read line; do echo -ne "\033[2K\r"; printf "    ${Grey}$line${Color_Off}\r"; done 
-        ${REPO_CMD} ${FETCH} origin ${branch} 2>&1  # | rolling_output #0<&0 #| while read line; do echo -ne "\033[2K\r"; printf "    ${Grey}$line${Color_Off}\r"; done 
-        ${REPO_CMD} ${CREATE_BRANCH} ${branch} origin/${branch} 2>&1  # | rolling_output #0<&0 #| while read line; do echo -ne "\033[2K\r"; printf "    ${Grey}$line${Color_Off}\r"; done
-        ${REPO_CMD} ${CREATE_BRANCH} ${branch}-source ope-upstream/${branch} 2>&1  # | rolling_output #0<&0 #| while read line; do echo -ne "\033[2K\r"; printf "    ${Grey}$line${Color_Off}\r"; done    
-    done
+        ${REPO_CMD} ${INIT}
+        ${REPO_CMD} ${REMOTE_ADD} ope-upstream ${OPE_REPO_URL} 
+        ${REPO_CMD} ${REMOTE_ADD} origin ${url}
 
-    ${REPO_CMD} ${SWITCH_BRANCH} ${UPSTREAM_BRANCHES[0]}  2>&1
+        for branch in "${UPSTREAM_BRANCHES[@]}"; do
+            ${REPO_CMD} ${FETCH} ope-upstream ${branch} 2>&1
+            ${REPO_CMD} ${FETCH} origin ${branch} 2>&1
+            ${REPO_CMD} ${CREATE_BRANCH} ${branch} origin/${branch} 2>&1 
+            ${REPO_CMD} ${CREATE_BRANCH} ${branch}-source ope-upstream/${branch} 2>&1  
+        done
 
+        ${REPO_CMD} ${SWITCH_BRANCH} ${UPSTREAM_BRANCHES[0]}  2>&1
+    
+    } | tee >(sed "s/$(printf '\033')\[[0-9;]*[a-zA-Z]//g" >> $LOG_FILE) 
 }
 
 function create
@@ -175,11 +221,6 @@ function create
 {   
     name=$1
     
-    # Logging information
-    func_name=${FUNCNAME[0]}
-    func_args=$@
-    fc_header_logging "$func_name $func_args"
-
     # Help message
     if [[ -z $name || $name == '-h' ]]; then
         echo "Usage:  ${0##*/} create <bookName>"
@@ -190,7 +231,12 @@ function create
         return -1
     fi
 
-    {
+    # Logging information
+    func_name=${FUNCNAME[0]}
+    func_args=$@
+    fc_header_logging "$func_name $func_args"
+
+    {   
         # Check if the organization already exists locally
         if [[ -d $name ]]; then
             echo -e "$HEADER${Red}ERROR: Organization/Directory already exists${Color_Off}"
@@ -199,23 +245,14 @@ function create
 
         # Create the organization
         mkdir -p $name
-        # Creating configuration
-        echo -e "$HEADER${Cyan}Creating OPE configurations${Color_Off}"
-        #touch $IGNORE_FILE
-        #echo $OPE_CONFIG_DIR >> $IGNORE_FILE
-        #mkdir -p $OPE_CONFIG_DIR
-
         cd $name
         
         read -r -p "    Enter the email of the ${name} orginzation: " user_input
         if [ -z "$user_input" ]; then
-            #echo "${name}@${EMAIL_SERVICE}.com" > ../$OPE_CONFIG_DIR/email
             echo -e "    The email was set to default value: ${BBlack}${name}@${EMAIL_SERVICE}.com${Color_Off}"
         else
-            #echo $user_input > ../$OPE_CONFIG_DIR/email
             echo -e "    The email was set to: ${BBlack}${user_input}${Color_Off}"
         fi
-
 
         read -r -p "    Enter the source URL of the ${name} orginzation: " user_input
         if [ -z "$user_input" ]; then
@@ -225,10 +262,8 @@ function create
         else
             NEW_REPO_URL=$user_input  
         fi
-        #echo $NEW_REPO_URL > ../$OPE_CONFIG_DIR/source_url
         echo -e "    The ${name} source URL was set to: ${BBlack}${NEW_REPO_URL}${Color_Off}"
 
-        # Creating the organization
         while true; do
             read -r -p "    Are you building on top of an existing OPE book? [Y/n]: " user_input
             if [ -z "$user_input" ]; then
@@ -259,32 +294,25 @@ function create
                     break;
                 fi
             done
-            # | rolling_output
             OPE_REPO_URL=$user_input
         fi
 
         ${REPO_CMD} ${INIT}
 
         # Adding the remotes
-        ${REPO_CMD} ${REMOTE_ADD} ope-upstream ${OPE_REPO_URL} # | rolling_output #0<&0
-        ${REPO_CMD} ${REMOTE_ADD} origin ${NEW_REPO_URL} # | rolling_output #0<&0
+        ${REPO_CMD} ${REMOTE_ADD} ope-upstream ${OPE_REPO_URL} 
+        ${REPO_CMD} ${REMOTE_ADD} origin ${NEW_REPO_URL}
 
         for branch in "${UPSTREAM_BRANCHES[@]}"; do
-            ${REPO_CMD} ${FETCH} ope-upstream ${branch} 2>&1  # | rolling_output #0<&0 #| while read line; do echo -ne "\033[2K\r"; printf "    ${Grey}$line${Color_Off}\r"; done 
-            ${REPO_CMD} ${SWITCH_BRANCH} ${branch}  2>&1  # | rolling_output #0<&0 #| while read line; do echo -ne "\033[2K\r"; printf "    ${Grey}$line${Color_Off}\r"; done
-            ${REPO_CMD} ${RENAME_BRANCH} ${branch}-source  2>&1  # | rolling_output #0<&0 #| while read line; do echo -ne "\033[2K\r"; printf "    ${Grey}$line${Color_Off}\r"; done
-            ${REPO_CMD} ${CREATE_BRANCH} ${branch}  2>&1  # | rolling_output #0<&0 #| while read line; do echo -ne "\033[2K\r"; printf "    ${Grey}$line${Color_Off}\r"; done
-            ${REPO_CMD} ${PUSH_FIRST} origin ${branch} 2>&1 # | rolling_output #0<&0
+            ${REPO_CMD} ${FETCH} ope-upstream ${branch} 2>&1  
+            ${REPO_CMD} ${SWITCH_BRANCH} ${branch}  2>&1  
+            ${REPO_CMD} ${RENAME_BRANCH} ${branch}-source  2>&1 
+            ${REPO_CMD} ${CREATE_BRANCH} ${branch}  2>&1  
+            ${REPO_CMD} ${PUSH_FIRST} origin ${branch} 2>&1 
         done
 
-        ${REPO_CMD} ${SWITCH_BRANCH} ${UPSTREAM_BRANCHES[0]}  2>&1  # # | rolling_output
+        ${REPO_CMD} ${SWITCH_BRANCH} ${UPSTREAM_BRANCHES[0]}  2>&1 
         echo -ne "\033[2K\r"
-        #printf "$HEADER${Cyan}Initilal Commit to ${name} repository.${Color_Off}\n"
-        #mv ../$IGNORE_FILE .
-        #mv ../$OPE_CONFIG_DIR .
-        #${REPO_CMD} ${ADD} . #2>&1 # | rolling_output
-        #${REPO_CMD} ${COMMIT} "Initial commit from the ope command line tool" 2>&1 ## | rolling_output
-        #${REPO_CMD} ${PUSH} 2>&1 ## | rolling_output
         echo -e "$HEADER${Green}OPE book organization has been successfully created ${Color_Off}"
 
     } 2>&1 | tee >(sed "s/$(printf '\033')\[[0-9;]*[a-zA-Z]//g" >> $LOG_FILE) 
@@ -296,6 +324,7 @@ function update
     option=$1
     verify_repo
 
+    # Help message
     if [[ ! -z "$option" && $option = '-h' ]]; then
         echo "Usage:  ${0##*/} update [options]"
         echo "   will update and rebase based on the current branch"
@@ -305,23 +334,30 @@ function update
         return -1
     fi
 
-    current_branch=$(${REPO_CMD} ${CURRENT_BRANCH})
-    echo -e "$HEADER${Cyan}Updating the book repository on ${Color_Off}${BCyan}${current_branch}${Color_Off}"
-    ${REPO_CMD} ${SWITCH_BRANCH} ${current_branch}-source
-    ${REPO_CMD} ${PULL} ope-upstream ${current_branch}
-    ${REPO_CMD} ${SWITCH_BRANCH} ${current_branch}
+    # Logging information
+    func_name=${FUNCNAME[0]}
+    func_args=$@
+    fc_header_logging "$func_name $func_args"
 
-    if [[ $option = '-u' ]]; then
-        echo -e "$HEADER${Cyan}Updating the OPE framework only${Color_Off}"
-        echo -e "$HEADER${BGreen}OPE upstream ${current_branch}${Color_Off}${Green} has been successfully updated ${Color_Off}"
-        return
-    fi
+    # The following will send to the log file
+    {
+        current_branch=$(${REPO_CMD} ${CURRENT_BRANCH})
+        echo -e "$HEADER${Cyan}Updating the book repository on ${Color_Off}${BCyan}${current_branch}${Color_Off}"
+        ${REPO_CMD} ${SWITCH_BRANCH} ${current_branch}-source
+        ${REPO_CMD} ${PULL} ope-upstream ${current_branch}
+        ${REPO_CMD} ${SWITCH_BRANCH} ${current_branch}
 
-    echo -e "$HEADER${Cyan}Rebasing the book repository on ${Color_Off}${BCyan}${current_branch}${Color_Off}"
-    ${REPO_CMD} ${REBASE} ${current_branch}-source
-    echo -e "$HEADER${BGreen}${current_branch}${Color_Off}${Green} has been successfully updated ${Color_Off}"
+        if [[ $option = '-u' ]]; then
+            echo -e "$HEADER${Cyan}Updating the OPE framework only${Color_Off}"
+            echo -e "$HEADER${BGreen}OPE upstream ${current_branch}${Color_Off}${Green} has been successfully updated ${Color_Off}"
+            return
+        fi
 
-
+        echo -e "$HEADER${Cyan}Rebasing the book repository on ${Color_Off}${BCyan}${current_branch}${Color_Off}"
+        ${REPO_CMD} ${REBASE} ${current_branch}-source
+        echo -e "$HEADER${BGreen}${current_branch}${Color_Off}${Green} has been successfully updated ${Color_Off}"
+        
+    } 2>&1 | tee >(sed "s/$(printf '\033')\[[0-9;]*[a-zA-Z]//g" >> $LOG_FILE)
 }
 
 function build
@@ -330,6 +366,7 @@ function build
     option=$1
     verify_repo
 
+    # Help message
     if [[ $option = '-h' ]]; then
         echo "Usage:  ${0##*/} build [options]"
         echo
@@ -365,6 +402,7 @@ function pub
     option=$1
     verify_repo
 
+    # Help message
     if [[ $option = '-h' ]]; then
         echo "Usage:  ${0##*/} pub [options]"
         echo
@@ -380,44 +418,19 @@ function pub
         echo $option
     fi
 
-    current_branch=$(${REPO_CMD} ${CURRENT_BRANCH})
-    echo -e "$HEADER${Cyan}Publishing the on ${Color_Off}${BCyan}${current_branch}${Color_Off}"
-    make pub
-    echo -e "$HEADER${Green}${current_branch} has been successfully published ${Color_Off}"
-}
+    # Logging information
+    func_name=${FUNCNAME[0]}
+    func_args=$@
+    fc_header_logging "$func_name $func_args"
 
-print_func_page()
-{
-    func_names=($(grep '^function' $0 | awk '{print $2}'))
-    grep '^#DESCRIPTION' $0 | awk -F: '{print $2}' | while read line ; do echo -e "  ${Blue}${func_names[$i]}${Color_Off}, $line\n"; i=$((i+1)); done | column -t -s,
-}
-
-Usage()
-{
-    echo 
-    echo "Usage:  ${0##*/} FUNCTION {ARGS} " >&2
-    echo
-    echo "A command-line tool for building open source infrastructures using ope framework"
-    echo 
-    echo "Functions: "
-    print_func_page
-    echo
-    echo "for each func use '-h' to print its Usage: eg. ${0##*/} dump -h"
-    echo "will print the Usage for the dump command"
-}
-
-
-
-
-process_args()
-{
-  if [[ $# == 0 || $1 = '-h' ]]
-  then
-    Usage
-    exit -1
-  fi
-
-  dofunc=$1
+    # The following will send to the log file
+    {
+        current_branch=$(${REPO_CMD} ${CURRENT_BRANCH})
+        echo -e "$HEADER${Cyan}Publishing the on ${Color_Off}${BCyan}${current_branch}${Color_Off}"
+        make pub
+        echo -e "$HEADER${Green}${current_branch} has been successfully published ${Color_Off}"
+    
+    } 2>&1 | tee >(sed "s/$(printf '\033')\[[0-9;]*[a-zA-Z]//g" >> $LOG_FILE)
 }
 
 set -e
@@ -429,3 +442,4 @@ shift
 $dofunc "$@"
 
 exit $?
+
