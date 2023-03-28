@@ -45,7 +45,7 @@ REPO_URL="git@github.com:\${ORG_NAME}/\${REPO_NAME}.git"
 REPO_SERVICE_DIR=".git"
 IF_INSIDE_REPO="rev-parse --is-inside-work-tree"
 SHOW_TOP_LEVEL="rev-parse --show-toplevel"
-
+LIST_REMOTE_BRANCHES="branch -r | grep -v HEAD"
 
 # email services
 EMAIL_SERVICE="gmail"
@@ -55,7 +55,7 @@ EMAIL_SERVICE="gmail"
 OPE_ORG_NAME="OPEFFORT"
 OPE_REPO_NAME="ope"
 OPE_CONFIG_DIR="opeconfig"
-UPSTREAM_BRANCHES=("main" "coursecontenttemplate" "Documentation")
+UPSTREAM_BRANCHES=("main" "coursecontenttemplate" "Documentation" "tools")
 
 # --------- Script begins here -------------
 
@@ -134,6 +134,21 @@ print_func_page() {
     grep '^#DESCRIPTION' $0 | awk -F: '{print $2}' | while read line ; do echo -e "  ${Blue}${func_names[$i]}${Color_Off}, $line\n"; i=$((i+1)); done | column -t -s,
 }
 
+get_parent_branch(){
+    # Get the name of the current branch
+    current_branch=$(git symbolic-ref --short HEAD)
+    # Get the name of the branch that the current branch was branched off from
+    parent_branch=$(git log --pretty=format:'%D' | grep -o '^[^,]*' | grep -v "$current_branch" | grep "ope" | head -n1 | sed 's/ope-upstream\///')
+
+    echo "$parent_branch"
+}
+
+get_branches_from_url(){
+    url=$1
+    branches=$(git ls-remote --heads $url | sed 's/.*\///')
+    echo $branches
+}
+
 Usage() {
     # A helper function that prints the Usage of the script
 
@@ -165,12 +180,16 @@ function clone
 #DESCRIPTION: clone the OPE repository for development
 {
     url=$1
+    options=$2
 
     # Help message
     if [[ -z $url || $url = '-h' ]]; then
-        echo "Usage:  ${0##*/} clone <url>"
+        echo "Usage:  ${0##*/} clone <url> [OPTIONS]"
         echo "   will clone the OPE repository and setup the branches for development"
-        echo "   See the ope gettings started doc for more info."
+        echo "   "
+        echo "   Options:"
+        echo "   -a, --all-branch  print verbose output"
+        echo "   -h, --help     print this help message"
         return -1
     fi
 
@@ -206,12 +225,22 @@ function clone
 
         for branch in "${UPSTREAM_BRANCHES[@]}"; do
             ${REPO_CMD} ${FETCH} ope-upstream ${branch} 2>&1
+            ${REPO_CMD} ${CREATE_BRANCH} ${branch}-source ope-upstream/${branch} 2>&1  
             ${REPO_CMD} ${FETCH} origin ${branch} 2>&1
             ${REPO_CMD} ${CREATE_BRANCH} ${branch} origin/${branch} 2>&1 
-            ${REPO_CMD} ${CREATE_BRANCH} ${branch}-source ope-upstream/${branch} 2>&1  
         done
 
+        if [[ $options == *'-a'* || $options == *'--all-branch'* ]]; then
+            ${REPO_CMD} ${FETCH} origin 2>&1
+            for branch in $(get_branches_from_url $url); do
+                ${REPO_CMD} ${SWITCH_BRANCH} ${branch} 2>&1
+                ${REPO_CMD} ${PULL} 2>&1
+            done
+        fi
+
         ${REPO_CMD} ${SWITCH_BRANCH} ${UPSTREAM_BRANCHES[0]}  2>&1
+
+        echo -e "$HEADER${Green}OPE Repository $repo is successfully cloned ${Color_Off}"
     
     } | tee >(sed "s/$(printf '\033')\[[0-9;]*[a-zA-Z]//g" >> $LOG_FILE) 
 }
@@ -330,6 +359,7 @@ function update
         echo "   will update and rebase based on the current branch"
         echo "   options:"
         echo "       -u: update the OPE framework only and do not perform a rebase"
+        echo "       -b: update new branches from the OPE framework"
         echo "   See the ope gettings started doc for more info."
         return -1
     fi
@@ -341,10 +371,27 @@ function update
 
     # The following will send to the log file
     {
+        if [[ ! -z "$option" && $option = '-b' ]]; then
+            echo -e "$HEADER${Cyan}Updating new branches from the OPE framework${Color_Off}"
+            for branch in "${UPSTREAM_BRANCHES[@]}"; do
+                if ! $(get_branches_from_url origin | grep -q "$branch"); then
+                    echo "  [new ope branch] -> $branch"
+                    ${REPO_CMD} ${FETCH} ope-upstream ${branch} 2>&1  
+                    ${REPO_CMD} ${SWITCH_BRANCH} ${branch}  2>&1  
+                    ${REPO_CMD} ${RENAME_BRANCH} ${branch}-source  2>&1 
+                    ${REPO_CMD} ${CREATE_BRANCH} ${branch}  2>&1  
+                    ${REPO_CMD} ${PUSH_FIRST} origin ${branch} 2>&1 
+                fi 
+            done
+            echo -e "$HEADER${Green}OPE upstream has been successfully updated ${Color_Off}"
+            return
+        fi
+
         current_branch=$(${REPO_CMD} ${CURRENT_BRANCH})
         echo -e "$HEADER${Cyan}Updating the book repository on ${Color_Off}${BCyan}${current_branch}${Color_Off}"
-        ${REPO_CMD} ${SWITCH_BRANCH} ${current_branch}-source
-        ${REPO_CMD} ${PULL} ope-upstream ${current_branch}
+        parent_branch=$(get_parent_branch)
+        ${REPO_CMD} ${SWITCH_BRANCH} ${parent_branch}-source
+        ${REPO_CMD} ${PULL} ope-upstream ${parent_branch}
         ${REPO_CMD} ${SWITCH_BRANCH} ${current_branch}
 
         if [[ $option = '-u' ]]; then
@@ -353,8 +400,8 @@ function update
             return
         fi
 
-        echo -e "$HEADER${Cyan}Rebasing the book repository on ${Color_Off}${BCyan}${current_branch}${Color_Off}"
-        ${REPO_CMD} ${REBASE} ${current_branch}-source
+        echo -e "$HEADER${Cyan}Applying changes from ${Color_Off}${BCyan}${parent_branch}-source${Color_Off}${Cyan} to ${Color_Off}${BCyan}${current_branch}${Color_Off}"
+        ${REPO_CMD} ${REBASE} ${parent_branch}-source
         echo -e "$HEADER${BGreen}${current_branch}${Color_Off}${Green} has been successfully updated ${Color_Off}"
         
     } 2>&1 | tee >(sed "s/$(printf '\033')\[[0-9;]*[a-zA-Z]//g" >> $LOG_FILE)
