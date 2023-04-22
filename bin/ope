@@ -372,9 +372,10 @@ function update
     # The following will send to the log file
     {
         if [[ ! -z "$option" && $option = '-b' ]]; then
-            echo -e "$HEADER${Cyan}Updating new branches from the OPE framework${Color_Off}"
+            echo -e "$HEADER${Cyan}Fetching new branches from the OPE framework${Color_Off}"
             for branch in "${UPSTREAM_BRANCHES[@]}"; do
                 if ! $(get_branches_from_url origin | grep -q "$branch"); then
+                    echo "  New ope branch is found"
                     echo "  [new ope branch] -> $branch"
                     ${REPO_CMD} ${FETCH} ope-upstream ${branch} 2>&1  
                     ${REPO_CMD} ${SWITCH_BRANCH} ${branch}  2>&1  
@@ -389,9 +390,9 @@ function update
 
         current_branch=$(${REPO_CMD} ${CURRENT_BRANCH})
         echo -e "$HEADER${Cyan}Updating the book repository on ${Color_Off}${BCyan}${current_branch}${Color_Off}"
-        parent_branch=$(get_parent_branch)
-        ${REPO_CMD} ${SWITCH_BRANCH} ${parent_branch}-source
-        ${REPO_CMD} ${PULL} ope-upstream ${parent_branch}
+        parent_branch=${current_branch}-source
+        ${REPO_CMD} ${SWITCH_BRANCH} ${parent_branch}
+        ${REPO_CMD} ${PULL} ope-upstream ${current_branch}
         ${REPO_CMD} ${SWITCH_BRANCH} ${current_branch}
 
         if [[ $option = '-u' ]]; then
@@ -401,7 +402,7 @@ function update
         fi
 
         echo -e "$HEADER${Cyan}Applying changes from ${Color_Off}${BCyan}${parent_branch}-source${Color_Off}${Cyan} to ${Color_Off}${BCyan}${current_branch}${Color_Off}"
-        ${REPO_CMD} ${REBASE} ${parent_branch}-source
+        ${REPO_CMD} ${REBASE} ${parent_branch}
         echo -e "$HEADER${BGreen}${current_branch}${Color_Off}${Green} has been successfully updated ${Color_Off}"
         
     } 2>&1 | tee >(sed "s/$(printf '\033')\[[0-9;]*[a-zA-Z]//g" >> $LOG_FILE)
@@ -489,4 +490,3 @@ shift
 $dofunc "$@"
 
 exit $?
-
