@@ -46,16 +46,15 @@ REPO_SERVICE_DIR=".git"
 IF_INSIDE_REPO="rev-parse --is-inside-work-tree"
 SHOW_TOP_LEVEL="rev-parse --show-toplevel"
 LIST_REMOTE_BRANCHES="branch -r | grep -v HEAD"
+LIST_REMOTE="ls-remote"
 
 # email services
 EMAIL_SERVICE="gmail"
 
 # OPE INFORMATION
 # --------------------
-OPE_ORG_NAME="OPEFFORT"
+OPE_ORG_NAME="like101101"
 OPE_REPO_NAME="ope"
-OPE_CONFIG_DIR="opeconfig"
-UPSTREAM_BRANCHES=("main" "coursecontenttemplate" "Documentation" "tools")
 
 # --------- Script begins here -------------
 
@@ -175,29 +174,43 @@ process_args() {
     dofunc=$1
 }
 
+if_valid_url(){
+    # A helper function that checks if the url is valid, this could be done in many different ways
+    url=$1
+    if $REPO_CMD $LIST_REMOTE "$url" >/dev/null 2>&1; then
+        return 0
+    else
+        printf "$HEADER${Red}ERROR: It is not a valid git repository URL \n${Color_Off}"
+        exit 1
+    fi
+}
+
 # ----------------- Main Functions -----------------
 function clone
-#DESCRIPTION: clone the OPE repository for development
+#DESCRIPTION: clone one OPE repository branch for development
 {
     url=$1
-    options=$2
 
-    # Help message
     if [[ -z $url || $url = '-h' ]]; then
-        echo "Usage:  ${0##*/} clone <url> [OPTIONS]"
-        echo "   will clone the OPE repository and setup the branches for development"
+        echo "Usage:  ${0##*/} clone <url> <branch-name>"
+        echo "   will clone the single branch of the OPE repository and setup it up for development"
         echo "   "
         echo "   Options:"
-        echo "   -a, --all-branch  print verbose output"
         echo "   -h, --help     print this help message"
         return -1
     fi
 
+    if_valid_url $url
+
     # Check if the organization already exists locally
     basename=$(basename $url)
     repo=${basename%.*}
-    if [[ -d $repo ]]; then
-        echo -e "$HEADER${Red}ERROR: Repository $repo already exists${Color_Off}"
+    branch_name=$2
+
+    new_dir_name="${repo}-${branch_name}"
+
+    if [[ -d $new_dir_name ]]; then
+        echo -e "$HEADER${Red}ERROR: $repo already exists${Color_Off}"
         return -1
     fi
 
@@ -212,35 +225,26 @@ function clone
         ORG_NAME="${OPE_ORG_NAME}"
         REPO_NAME="${OPE_REPO_NAME}"
         eval "OPE_REPO_URL=$REPO_URL"
-        echo $OPE_REPO_URL
 
-        echo -e "$HEADER${Cyan}Creating OPE repository locally${Color_Off}"
-        mkdir -p ${repo}
-        cd ${repo}
-        echo -e "$HEADER${Cyan}Linking ope-upstream branches${Color_Off}"
-
-        ${REPO_CMD} ${INIT}
-        ${REPO_CMD} ${REMOTE_ADD} ope-upstream ${OPE_REPO_URL} 
-        ${REPO_CMD} ${REMOTE_ADD} origin ${url}
-
-        for branch in "${UPSTREAM_BRANCHES[@]}"; do
-            ${REPO_CMD} ${FETCH} ope-upstream ${branch} 2>&1
-            ${REPO_CMD} ${CREATE_BRANCH} ${branch}-source ope-upstream/${branch} 2>&1  
-            ${REPO_CMD} ${FETCH} origin ${branch} 2>&1
-            ${REPO_CMD} ${CREATE_BRANCH} ${branch} origin/${branch} 2>&1 
-        done
-
-        if [[ $options == *'-a'* || $options == *'--all-branch'* ]]; then
-            ${REPO_CMD} ${FETCH} origin 2>&1
-            for branch in $(get_branches_from_url $url); do
-                ${REPO_CMD} ${SWITCH_BRANCH} ${branch} 2>&1
-                ${REPO_CMD} ${PULL} 2>&1
-            done
+        if $REPO_CMD $LIST_REMOTE $url >/dev/null 2>&1 | grep -q $branch_name; then
+            echo -e "$HEADER${Red}ERROR: branch:$branch_name does not exist.${Color_Off}"
+            return -1
         fi
 
-        ${REPO_CMD} ${SWITCH_BRANCH} ${UPSTREAM_BRANCHES[0]}  2>&1
+        echo -e "$HEADER${Cyan}Creating OPE repository locally${Color_Off}"
+        ${REPO_CMD} ${CLONE} -b ${branch_name} ${url} ${new_dir_name}
+        cd ${new_dir_name}
 
-        echo -e "$HEADER${Green}OPE Repository $repo is successfully cloned ${Color_Off}"
+        echo -e "$HEADER${Cyan}Linking ope-upstream branches${Color_Off}"
+        ${REPO_CMD} ${REMOTE_ADD} ope-upstream ${OPE_REPO_URL} 
+        ${REPO_CMD} ${FETCH} ope-upstream ${branch_name} 2>&1
+        ${REPO_CMD} ${CREATE_BRANCH} ${branch_name}-source ope-upstream/${branch_name} 2>&1  
+        ${REPO_CMD} ${SWITCH_BRANCH} ${branch_name}-source 2>&1
+        ${REPO_CMD} ${PULL} ope-upstream ${branch_name} 2>&1
+
+        ${REPO_CMD} ${SWITCH_BRANCH} ${branch_name}  2>&1
+
+        echo -e "$HEADER${Green}OPE Repository $new_dir_name is successfully cloned ${Color_Off}"
     
     } | tee >(sed "s/$(printf '\033')\[[0-9;]*[a-zA-Z]//g" >> $LOG_FILE) 
 }
